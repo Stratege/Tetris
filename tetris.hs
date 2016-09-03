@@ -116,10 +116,3 @@ simpleLoop !w tetris palette sur deltaT = do
         let deltaT'' = deltaT' + diffUTCTime finT startT 
         simpleLoop w tetris'' palette sur deltaT''
     else return ()
-
-advanceByTime deltaT tetris = do
-        let (deltaT',b) = if (deltaT > timeBetweenDrops) then (deltaT - timeBetweenDrops,True) else (deltaT,False)
-        if not b then return (deltaT',tetris) else (nextGameStep tetris (Just Down) >>= advanceByTime deltaT')
-        where timeBetweenDrops = 0.5
-
-

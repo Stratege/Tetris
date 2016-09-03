@@ -13,7 +13,7 @@ import System.Random
 
 
 newtype Score = Score Int deriving (Num,Show)
-data Level = Level Int deriving Show
+newtype Level = Level Int deriving (Num,Show)
 data Map = Map Int Int [[Field]] deriving Show
 data Field = Empty | Filled Color deriving Show
 data Color = Teal | Blue | Orange | Yellow | Green | Violet | Red deriving Show
@@ -47,6 +47,10 @@ testMap = Map 10 40 (rep 20 (rep 10 Empty) ++ rep 8 (rep 4 Empty ++ [Filled Gree
 testTetris = Tetris testMap Nothing (Score 0) (Level 0)
 
 getMap (Tetris map _ _ _) = map
+getLevel (Tetris _ _ _ level) = level
+
+unScore (Score x) = x
+unLevel (Level x) = x
 
 rotate :: [[Bool]] -> [[Bool]]
 rotate xss = (++ L.replicate y (L.replicate (L.length xss) False)) . fmap (\xs -> L.drop x xs ++ L.replicate x False) . L.drop y $ xss'
@@ -138,14 +142,20 @@ nextGameStep (Tetris map@(Map x _ _) Nothing score level) _ = do
     i <- randomRIO (0,L.length blocks - 1)
     let newElm = FallingElement (blocks L.!! i) (V2 (x `div` 2) 0) 
     return $ Tetris (addFields newElm map) (Just newElm) score level
-nextGameStep (Tetris map (Just elm) score level) (Just dir) = return $ Tetris map' elm'' score' level
+nextGameStep (Tetris map (Just elm) score level) (Just dir) = return $ Tetris map' elm'' score' (g level)
     where (map',elm') = moveFalling dir map elm
           f (Prelude.Left score') = (score'+score,Nothing)
           f (Prelude.Right elm'') = (score,Just elm'')
           (score',elm'') = f elm'
+          g x = if unScore score' > unLevel ((x*x+1)*10) then g (x+1) else x
 
 toBool 0 = False
 toBool x = True
+
+advanceByTime deltaT tetris = do
+        let (deltaT',b) = if (deltaT > timeBetweenDrops) then (deltaT - timeBetweenDrops,True) else (deltaT,False)
+        if not b then return (deltaT',tetris) else (nextGameStep tetris (Just Down) >>= advanceByTime deltaT')
+        where timeBetweenDrops = max 0.1 (0.5 - 0.05 * (realToFrac . unLevel . getLevel $ tetris))
 
 
 
