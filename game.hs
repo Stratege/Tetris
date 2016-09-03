@@ -16,13 +16,14 @@ newtype Score = Score Int deriving (Num,Show)
 newtype Level = Level Int deriving (Num,Show)
 data Map = Map Int Int [[Field]] deriving Show
 data Field = Empty | Filled Color deriving Show
-data Color = Teal | Blue | Orange | Yellow | Green | Violet | Red deriving Show
+data Color = Teal | Blue | Orange | Yellow | Green | Violet | Red | Black deriving Show
 data Tetris = Tetris Map (Maybe FallingElement) Score Level deriving Show
 
 data Shape = Shape Color [[Bool]] deriving Show
 data FallingElement = FallingElement Shape (V2 Int) deriving Show -- top left pos
 data Direction = Down | Left | Right | Rotate deriving (Eq,Show)
 
+data RawParticle = RawParticle Color (V2 Int)
 
 blocks = [line,revL,revR,block,sblock,tblock,zblock]
    where line = Shape Teal (f $ rep 4 [1,0,0,0])
@@ -38,7 +39,7 @@ blocks = [line,revL,revR,block,sblock,tblock,zblock]
 
 emptyMap = Map x y (L.replicate y (L.replicate x Empty))
    where x = 10
-         y = 40
+         y = 30
 
 emptyTetris = Tetris emptyMap Nothing (Score 0) (Level 0)
 
@@ -71,12 +72,12 @@ getShapeOffsetHelper lls g v = (V2 x y)
          y = f $ L.transpose lls
          f = L.foldr g v . fmap (L.foldr g v . fmap fst . L.filter (\(_,b) -> b) . L.zipWith (,) [0..])
 
-moveFalling :: Direction -> Map -> FallingElement -> (Map,Either Score FallingElement)
+moveFalling :: Direction -> Map -> FallingElement -> (Map,Either Score FallingElement,[RawParticle])
 moveFalling dir map@(Map x y lls) fe@(FallingElement shape (V2 x2 y2))
-   | x2 < 0 || x <= x3 = (map,Prelude.Right fe)
+   | x2 < 0 || x <= x3 = (map,Prelude.Right fe,[])
    | (dir == Down) && (y <= (y3+1) || collides ((\(Shape _ x) -> x) newShape) nextFields) = (if y2 == 0 then trace' "you lost" else id) (doScoring map)
-   | (dir /= Down) && collides ((\(Shape _ x) -> x) newShape) nextFields = (map,Prelude.Right fe)
-   | otherwise = (addFields fe2 mapWithoutFalling,Prelude.Right fe2)
+   | (dir /= Down) && collides ((\(Shape _ x) -> x) newShape) nextFields = (map,Prelude.Right fe,[])
+   | otherwise = (addFields fe2 mapWithoutFalling,Prelude.Right fe2,[])
    where (V2 x3 y3) = (V2 x2 y2) + getShapeOffsets newShape
          mapWithoutFalling = removeFields fe map
          nextFields = getFields (Rectangle (P nextPos) (V2 4 4)) mapWithoutFalling
@@ -90,11 +91,13 @@ moveFalling dir map@(Map x y lls) fe@(FallingElement shape (V2 x2 y2))
              | dir == Rotate = (\(Shape a x) -> (Shape a (rotate x))) shape
              | otherwise = shape
 
+getColor Empty = Black
+getColor (Filled x) = x
 
-doScoring (Map x y lls) = (Map x y lls'',Prelude.Left (Score linesResolved))
-   where lls' = L.filter (not . L.all isFilled) lls
+doScoring (Map x y lls) = (Map x y lls'',Prelude.Left (Score linesResolved),rawParticles)
+   where (lls',rawParticles) = fst . L.foldl (\((xs,p),n) x -> (if (L.all isFilled x) then (xs,L.zipWith (\a b -> RawParticle b (V2 a n)) [0..] (L.map getColor x) ++ p) else (x:xs,p),n+1)) (([],[]),0) $ lls
          linesResolved = y - L.length lls'
-         lls'' = L.replicate linesResolved (L.replicate x Empty) ++ lls'
+         lls'' = L.replicate linesResolved (L.replicate x Empty) ++ L.reverse lls'
 
 getFields :: Rectangle Int -> Map -> [[Field]]
 getFields (Rectangle _ (V2 0 _)) _ = []
@@ -137,13 +140,13 @@ partitionAt n xs = partitionAt' n n xs []
           partitionAt' n 0 xs acc = (Prelude.reverse acc) : partitionAt' n n xs []
           partitionAt' n m (x:xs) acc = partitionAt' n (m-1) xs (x:acc)
 
-nextGameStep x Nothing = return x
+nextGameStep x Nothing = return (x,[])
 nextGameStep (Tetris map@(Map x _ _) Nothing score level) _ = do
     i <- randomRIO (0,L.length blocks - 1)
     let newElm = FallingElement (blocks L.!! i) (V2 (x `div` 2) 0) 
-    return $ Tetris (addFields newElm map) (Just newElm) score level
-nextGameStep (Tetris map (Just elm) score level) (Just dir) = return $ Tetris map' elm'' score' (g level)
-    where (map',elm') = moveFalling dir map elm
+    return $ (Tetris (addFields newElm map) (Just newElm) score level,[])
+nextGameStep (Tetris map (Just elm) score level) (Just dir) = return $ (Tetris map' elm'' score' (g level),rawParticles)
+    where (map',elm',rawParticles) = moveFalling dir map elm
           f (Prelude.Left score') = (score'+score,Nothing)
           f (Prelude.Right elm'') = (score,Just elm'')
           (score',elm'') = f elm'
@@ -152,9 +155,11 @@ nextGameStep (Tetris map (Just elm) score level) (Just dir) = return $ Tetris ma
 toBool 0 = False
 toBool x = True
 
-advanceByTime deltaT tetris = do
+advanceByTime deltaT tetris = advanceByTime' deltaT (tetris,[])
+
+advanceByTime' deltaT (tetris,rawParticles) = do
         let (deltaT',b) = if (deltaT > timeBetweenDrops) then (deltaT - timeBetweenDrops,True) else (deltaT,False)
-        if not b then return (deltaT',tetris) else (nextGameStep tetris (Just Down) >>= advanceByTime deltaT')
+        if not b then return (deltaT',tetris,rawParticles) else (nextGameStep tetris (Just Down) >>= advanceByTime' deltaT')
         where timeBetweenDrops = max 0.1 (0.5 - 0.05 * (realToFrac . unLevel . getLevel $ tetris))
 
 
