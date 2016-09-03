@@ -56,27 +56,20 @@ getFieldRect (totalFieldWidthCount,totalFieldHeightCount) (curX,curY) (Rectangle
           new_width = round (fieldsize_x * realToFrac width)
           new_height = round (fieldsize_y * realToFrac height)
 
-drawFields (Map x y lls) palett sur surOffset surSize = do
+drawFields (Map x y lls) palett ren surOffset surSize = do
     let lls' =  fmap (L.zipWith (\x (a,b) -> (x,a,b)) [0..]) $ L.zipWith (\x y -> fmap (\a -> (x,a)) y) [0..] lls
-    let lls'' = fmap (fmap (drawField x y palett surOffset surSize sur)) lls'
+    let lls'' = fmap (fmap (drawField x y palett surOffset surSize ren)) lls'
     sequence_ . fmap sequence $ lls''
 
-drawField :: Int -> Int -> Palett -> (V2 CInt) -> (V2 CInt) -> Surface -> (Int,Int,Field) -> IO ()
-drawField x y palett surOffset size sur (curX,curY,field) = surfaceFillRect sur (Just drawRect) drawColor
+drawField :: Int -> Int -> Palett -> (V2 CInt) -> (V2 CInt) -> Renderer -> (Int,Int,Field) -> IO ()
+drawField x y palett surOffset size ren (curX,curY,field) = rendererDrawColor ren $= drawColor >> fillRect ren (Just drawRect)
     where drawRect = getFieldRect (x,y) (curX,curY) (Rectangle (P surOffset) size)
           drawColor = fieldToDrawColor field palett
 
 main = do 
-    (w,sur) <- initStuff
-    windowFormat <- surfaceFormat sur
-    size <- surfaceDimensions sur
-    surFor <- surfaceFormat sur
-    surfaceBlendMode sur $= BlendAdditive
-    helperSur <-convertSurface sur surFor -- bit of a hack, but w/e
-    updateWindowSurface w
---    r <- getRendererInfo =<< createRenderer w 0 defaultRenderer
---    showSimpleMessageBox (Just w) Error "title" (pack . Prelude.unlines . partitionAt 50 . show $ r)
-    simpleLoop w emptyTetris palette sur helperSur 0 []
+    (w,ren) <- initStuff
+    present ren
+    simpleLoop w emptyTetris palette ren 0 []
     destroyWindow w
     quit
 
@@ -84,8 +77,8 @@ main = do
 initStuff = do
     initializeAll
     w <- createWindow "Tetris" (defaultWindow {windowInitialSize = V2 380 900})
-    s <- getWindowSurface w
-    return (w,s)
+    r <- createRenderer w 0 defaultRenderer
+    return (w,r)
 
 loadMediaOptimized format = do
     b <- loadBMP "ar.bmp"
@@ -105,8 +98,8 @@ parseKeyboardEvent (KeyboardEvent (KeyboardEventData _ Pressed repeat (Keysym _ 
 
 parseKeyboardEvent _ = Nothing
 
---simpleLoop :: _ -> Tetris -> Palett -> Surface -> _ -> [Particle] -> IO ()
-simpleLoop !w tetris palette sur helperSur deltaT particles = do
+--simpleLoop :: _ -> Tetris -> Palett -> Renderer -> _ -> [Particle] -> IO ()
+simpleLoop !w tetris palette ren deltaT particles = do
     startT <- getCurrentTime
     e <- pollEvents
     let !x = Prelude.length $ Prelude.filter ((== (WindowClosedEvent (WindowClosedEventData w))) . eventPayload) e
@@ -114,26 +107,27 @@ simpleLoop !w tetris palette sur helperSur deltaT particles = do
     if x == 0 then do
         (tetris',rawParticles) <- if L.length y == 0 then return (tetris,[]) else (nextGameStep tetris (parseKeyboardEvent . L.head $ y))
         (deltaT',tetris'',rawParticles2) <- advanceByTime deltaT tetris'
-        particles2 <- convertParticles tetris sur (rawParticles ++ rawParticles2)
+        particles2 <- convertParticles tetris ren (rawParticles ++ rawParticles2)
         let particles' = computeParticles (particles2++particles)
-        draw tetris'' palette sur
-        drawParticles sur helperSur palette particles'
-        updateWindowSurface w
+        draw tetris'' palette ren
+        drawParticles ren palette particles'
+        present ren
         delay 10
         finT <- getCurrentTime
         let deltaT'' = deltaT' + diffUTCTime finT startT 
-        simpleLoop w tetris'' palette sur helperSur deltaT'' particles'
+        simpleLoop w tetris'' palette ren deltaT'' particles'
     else return ()
 
 
 --todo: figure out good shrinking-to-size algo
-draw tetris palette sur = do
-    (surOffset,sizeField) <- calculateGameArea tetris sur    
-    surfaceFillRect sur Nothing (V4 255 0 255 0)
-    drawFields (getMap tetris) palette sur surOffset sizeField
+draw tetris palette ren = do
+    (surOffset,sizeField) <- calculateGameArea tetris ren
+    rendererDrawColor ren $= (V4 255 0 255 0)
+    clear ren
+    drawFields (getMap tetris) palette ren surOffset sizeField
 
-calculateGameArea tetris sur = do
-    (V2 w h)  <- surfaceDimensions sur
+calculateGameArea tetris ren = do
+    (Just (Rectangle _ (V2 w h))) <- get . rendererViewport $ ren
     let w' = w - leftWidth
     let sizeField = (V2 w' (floor (realToFrac w' / aspect)))
     let surOffset = (V2 leftWidth 0)
@@ -157,14 +151,19 @@ convertParticle f (RawParticle c (V2 x2 y2)) = do
     y3 <- randomRIO (y,y+h)
     return (Particle c (V2 (fromIntegral x3) (fromIntegral y3)) (Growing,0))
 
-drawParticles sur helperSur palett [] = return ()
-drawParticles sur helperSur palett ((Particle c (V2 x y) (phase,n)):xs) = q >> drawParticles sur helperSur palett xs
-    where drawPos = P (V2 (fromIntegral x) (fromIntegral y))
+drawParticles ren palett xs = do
+     mode <- get (rendererDrawBlendMode ren)
+     rendererDrawBlendMode ren $= BlendAdditive
+     drawParticles' ren palett xs
+     rendererDrawBlendMode ren $= mode
+
+drawParticles' ren palett [] = return ()
+drawParticles' ren palett ((Particle c (V2 x y) (phase,n)):xs) = q >> drawParticles' ren palett xs
+    where drawRect = Rectangle (P (V2 (fromIntegral x) (fromIntegral y))) particleSize
           drawColor = addAlpha (25*n) . whiten 100 . colorLookup c $ palett
           n' = 5 + fromIntegral (n `div` 2)
           particleSize = (V2 n' n')
-          helperRect = Rectangle (P (V2 0 0)) particleSize
-          q = surfaceFillRect helperSur (Just helperRect) drawColor >> surfaceBlit helperSur (Just helperRect) sur (Just drawPos)
+          q = rendererDrawColor ren $= drawColor >> fillRect ren (Just drawRect)
 
 addAlpha :: Int -> V4 Word8 -> V4 Word8
 addAlpha n (V4 x y z a) = (V4 x y z (f a))
