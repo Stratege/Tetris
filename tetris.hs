@@ -246,8 +246,7 @@ simpleLoop !w tetris palette sur deltaT = do
     let !y = Prelude.filter isKeyboardEvent . fmap eventPayload $ e
     if x == 0 then do
         tetris' <- if L.length y == 0 then return tetris else (nextGameStep tetris (parseKeyboardEvent . L.head $ y))
-        let (deltaT',b) = if deltaT > 0.5 then (deltaT - 0.5,True) else (deltaT,False)
-        tetris'' <- if not b then return tetris' else nextGameStep tetris' (Just Down)
+        (deltaT',tetris'') <- advanceByTime deltaT tetris'
         drawFields (getMap tetris'') palette sur 
         updateWindowSurface w
         delay 10
@@ -255,3 +254,8 @@ simpleLoop !w tetris palette sur deltaT = do
         let deltaT'' = deltaT' + diffUTCTime finT startT 
         simpleLoop w tetris'' palette sur deltaT''
     else return ()
+
+advanceByTime deltaT tetris = do
+        let (deltaT',b) = if (deltaT > timeBetweenDrops) then (deltaT - timeBetweenDrops,True) else (deltaT,False)
+        if not b then return (deltaT',tetris) else (nextGameStep tetris (Just Down) >>= advanceByTime deltaT')
+        where timeBetweenDrops = 0.5
