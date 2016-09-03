@@ -18,14 +18,14 @@ type Palett = (V4 Word8,V4 Word8,V4 Word8,V4 Word8,V4 Word8,V4 Word8,V4 Word8,V4
 
 palette :: Palett
 palette = (black,teal,blue,orange,yellow,green,violet,red)
-   where black = V4 0 0 0 0
-         teal = V4 0 255 255 0
-         blue = V4 0 0 255 0
-         orange = V4 255 127 0 0
-         yellow = V4 255 255 0 0 
-         green = V4 0 255 0 0
-         violet = V4 127 0 255 0
-         red = V4 255 0 0 0
+   where black = V4 0 0 0 255
+         teal = V4 0 255 255 255
+         blue = V4 0 0 255 255
+         orange = V4 255 127 0 255
+         yellow = V4 255 255 0 255
+         green = V4 0 255 0 255
+         violet = V4 127 0 255 255
+         red = V4 255 0 0 255
 
 fieldToDrawColor :: Field -> Palett -> V4 Word8
 fieldToDrawColor Empty = colorLookup Black
@@ -98,7 +98,7 @@ parseKeyboardEvent (KeyboardEvent (KeyboardEventData _ Pressed repeat (Keysym _ 
 
 parseKeyboardEvent _ = Nothing
 
---simpleLoop :: _ -> Tetris -> Palett -> Renderer -> _ -> [Particle] -> IO ()
+simpleLoop :: Window -> Tetris -> Palett -> Renderer -> NominalDiffTime -> [Particle] -> IO ()
 simpleLoop !w tetris palette ren deltaT particles = do
     startT <- getCurrentTime
     e <- pollEvents
@@ -137,37 +137,41 @@ calculateGameArea tetris ren = do
           leftWidth = 80
 
 
-data Particle = Particle Color (V2 Int) (Phase,Int)
+data Particle = Particle Color (V2 Int) (Phase,Int) Direction
 data Phase = Growing | Decaying
 
+convertParticles :: Tetris -> Renderer -> [RawParticle] -> IO [Particle]
 convertParticles tetris sur rawParticles = do
     (surOffset,sizeField) <- calculateGameArea tetris sur
     mapM (convertParticle (\x2 y2 -> getFieldRect (x,y) (fromIntegral x2,fromIntegral y2) (Rectangle (P surOffset) sizeField))) rawParticles
     where (Map x y _) = getMap tetris
 
+convertParticle :: (Int -> Int -> Rectangle CInt) -> RawParticle -> IO Particle
 convertParticle f (RawParticle c (V2 x2 y2)) = do
     let (Rectangle (P (V2 x y)) (V2 w h)) = f x2 y2
     x3 <- randomRIO (x,x+w)
     y3 <- randomRIO (y,y+h)
-    return (Particle c (V2 (fromIntegral x3) (fromIntegral y3)) (Growing,0))
+    b <- randomIO
+    return (Particle c (V2 (fromIntegral x3) (fromIntegral y3)) (Growing,0) (if b then Game.Left else Game.Right))
 
+drawParticles :: Renderer -> Palett -> [Particle] -> IO ()
 drawParticles ren palett xs = do
      mode <- get (rendererDrawBlendMode ren)
-     rendererDrawBlendMode ren $= BlendAdditive
+     rendererDrawBlendMode ren $= BlendAlphaBlend
      drawParticles' ren palett xs
      rendererDrawBlendMode ren $= mode
 
 drawParticles' ren palett [] = return ()
-drawParticles' ren palett ((Particle c (V2 x y) (phase,n)):xs) = q >> drawParticles' ren palett xs
+drawParticles' ren palett ((Particle c (V2 x y) (phase,n) dir):xs) = q >> drawParticles' ren palett xs
     where drawRect = Rectangle (P (V2 (fromIntegral x) (fromIntegral y))) particleSize
-          drawColor = addAlpha (25*n) . whiten 100 . colorLookup c $ palett
+          drawColor = addAlpha (225-10*n) . whiten 100 . colorLookup c $ palett
           n' = 5 + fromIntegral (n `div` 2)
           particleSize = (V2 n' n')
           q = rendererDrawColor ren $= drawColor >> fillRect ren (Just drawRect)
 
 addAlpha :: Int -> V4 Word8 -> V4 Word8
 addAlpha n (V4 x y z a) = (V4 x y z (f a))
-   where f b = fromIntegral $ min 255 (n + fromIntegral b)
+   where f b = fromIntegral $ max 0 (fromIntegral b - n)
 
 whiten :: Int -> V4 Word8 -> V4 Word8
 whiten n (V4 x y z a) = (V4 (f x) (f y) (f z) a)
@@ -175,9 +179,16 @@ whiten n (V4 x y z a) = (V4 (f x) (f y) (f z) a)
 
    
 computeParticles [] = []
-computeParticles ((Particle c (V2 x y) p):xs) = maybe xs' (\p' -> (Particle c (V2 x y) p'):xs') p2
+computeParticles ((Particle c (V2 x y) p dir):xs) = maybe xs' (\p' -> (Particle c (V2 x' y') p' dir):xs') p2
     where f (Growing,n) = if n >= framesPerParticlePhase then Just (Decaying,n) else Just (Growing,n+1)
           f (Decaying,n) = if n == 0 then Nothing else Just (Decaying,n-1)
           p2 = f p
           xs' = computeParticles xs
-          framesPerParticlePhase = 20
+          framesPerParticlePhase = 10
+          g (Growing,_) a = a-1
+          g (Decaying,_) a = a+1
+          h Game.Left a = a-1
+          h Game.Right a = a+1
+          h _ a = a
+          x' = g p x
+          y' = h dir y
